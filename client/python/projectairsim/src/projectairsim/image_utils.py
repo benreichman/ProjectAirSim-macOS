@@ -1,4 +1,6 @@
+import asyncio
 import queue
+import sys
 from threading import Thread
 from typing import Dict, List
 
@@ -73,6 +75,20 @@ class ImageDisplay:
         if not self.runner:
             self.running = True
 
+            # macOS only allows GUI windows on the main thread, so run the display
+            # loop as a task on the main thread's asyncio event loop when one exists
+            if sys.platform == "darwin":
+                try:
+                    self.runner = asyncio.get_running_loop().create_task(
+                        self.display_loop_async()
+                    )
+                    return
+                except RuntimeError:
+                    projectairsim_log().warning(
+                        "ImageDisplay on macOS requires a running asyncio event loop "
+                        "on the main thread; falling back to a display thread."
+                    )
+
             # OpenCV doesn't always pop-up the windows properly when running with
             # multi-processing, so just use multi-threading
             self.runner = Thread(target=self.display_loop)
@@ -80,7 +96,11 @@ class ImageDisplay:
 
     def stop(self):
         self.running = False
-        if self.runner and self.runner.is_alive():
+        if isinstance(self.runner, asyncio.Task):
+            # The task exits on its next iteration; close windows here on the main thread
+            self.destroy_windows()
+            self.runner = None
+        elif self.runner and self.runner.is_alive():
             self.runner.join()
             self.runner = None
 
@@ -148,33 +168,43 @@ class ImageDisplay:
 
     def display_loop(self):
         while self.running:
-            for image_name, win_info in list(self.named_windows.items()):
-                image_q = self.image_data[image_name]
-                if not image_q.empty():
-                    image = image_q.get()
-
-                    # Create window if not already visible
-                    if not win_info["created"]:
-                        cv2.namedWindow(
-                            image_name,
-                            flags=cv2.WINDOW_GUI_NORMAL + cv2.WINDOW_AUTOSIZE,
-                        )
-                        if win_info["x"] is not None and win_info["y"] is not None:
-                            cv2.moveWindow(image_name, win_info["x"], win_info["y"])
-                        win_info["created"] = True
-
-                    self.display_image(
-                        image,
-                        image_name,
-                        win_info["resize_x"],
-                        win_info["resize_y"],
-                    )
-
-            key = cv2.waitKey(1)  # expensive, can take minimum 5~15 ms
-            if key == 27:  # Esc key
-                self.running = False
+            self.display_step()
 
         self.destroy_windows()
+
+    async def display_loop_async(self):
+        while self.running:
+            self.display_step()
+            await asyncio.sleep(0.01)
+
+        self.destroy_windows()
+
+    def display_step(self):
+        for image_name, win_info in list(self.named_windows.items()):
+            image_q = self.image_data[image_name]
+            if not image_q.empty():
+                image = image_q.get()
+
+                # Create window if not already visible
+                if not win_info["created"]:
+                    cv2.namedWindow(
+                        image_name,
+                        flags=cv2.WINDOW_GUI_NORMAL + cv2.WINDOW_AUTOSIZE,
+                    )
+                    if win_info["x"] is not None and win_info["y"] is not None:
+                        cv2.moveWindow(image_name, win_info["x"], win_info["y"])
+                    win_info["created"] = True
+
+                self.display_image(
+                    image,
+                    image_name,
+                    win_info["resize_x"],
+                    win_info["resize_y"],
+                )
+
+        key = cv2.waitKey(1)  # expensive, can take minimum 5~15 ms
+        if key == 27:  # Esc key
+            self.running = False
 
     def display_image(
         self,

@@ -208,6 +208,42 @@ public class ProjectAirSim : ModuleRules
             // JSBSim dll
             RuntimeDependencies.Add("$(BinaryOutputDir)/" + "JSBSim.dll", PluginDirectory + "/SimLibs/core_sim/jsbsim/lib/" + buildType + "/" + "JSBSim.dll");
         }
+        else if (Target.Platform == UnrealTargetPlatform.Mac)
+        {
+            // macOS SimLibs are built with Apple clang/libc++ (same as UE), so the
+            // static libraries link directly. JSBSim is static on macOS.
+            List<string> liststrLibraries = new List<string> {
+                    PluginDirectory + "/SimLibs/core_sim/" + buildType + "/libcore_sim.a",
+                    PluginDirectory + "/SimLibs/simserver/" + buildType + "/libsimserver.a",
+                    PluginDirectory + "/SimLibs/physics/" + buildType + "/libphysics.a",
+                    PluginDirectory + "/SimLibs/core_sim/jsbsim/lib/" + buildType + "/libJSBSim.a",
+                    PluginDirectory + "/SimLibs/multirotor_api/" + buildType + "/libmultirotor_api.a",
+                    PluginDirectory + "/SimLibs/rover_api/" + buildType + "/librover_api.a",
+                    PluginDirectory + "/SimLibs/rendering_scene/" + buildType + "/librendering_scene.a",
+                    PluginDirectory + "/SimLibs/mavlinkcom/" + buildType + "/libmavlinkcom.a",
+                    PluginDirectory + "/SimLibs/nng/" + buildType + "/libnng.a",
+                    PluginDirectory + "/SimLibs/assimp/" + buildType + "/libassimp.a",
+                    PluginDirectory + "/SimLibs/shared_libs/libonnxruntime.dylib",
+                };
+
+            if (buildType == "Debug")
+                liststrLibraries.Add(PluginDirectory + "/SimLibs/lvmon/" + buildType + "/liblvmon.a");
+
+            PublicAdditionalLibraries.AddRange(liststrLibraries);
+
+            // Stage onnxruntime next to the plugin binary; it is referenced via @rpath.
+            foreach (var file in Directory.GetFiles(PluginDirectory + "/SimLibs/shared_libs", "*.dylib"))
+            {
+                var fileInfo = new FileInfo(file);
+                var sourceFile = fileInfo.ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? file;
+                RuntimeDependencies.Add("$(BinaryOutputDir)/" + Path.GetFileName(file), sourceFile);
+            }
+            PublicRuntimeLibraryPaths.Add("$(BinaryOutputDir)");
+
+            // core_sim uses libcrypto; link UE's bundled OpenSSL to avoid duplicate symbols.
+            AddEngineThirdPartyPrivateStaticDependencies(Target, "OpenSSL");
+            PublicSystemLibraries.Add("z");
+        }
         else
         {
             List<string> liststrLibraries = new List<string> {
